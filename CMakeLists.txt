@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.1)
 
 project(snd_drv)
 
-include_directories(${CMAKE_SOURCE_DIR}/dependencies/soloud/include)
-link_directories(${CMAKE_SOURCE_DIR}/dependencies/soloud/lib)
+include_directories(${CMAKE_SOURCE_DIR}/dependencies/soloud-wavstream-loops/include)
+link_directories(${CMAKE_SOURCE_DIR}/dependencies/soloud-wavstream-loops/lib)
 
 # set output directories
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
