@@ -1,95 +1,117 @@
 #include "VoxObj.hpp"
 #include <assert.h>
-#include "soloud_speech.h"
+#include <vector>
 
-SoLoud::Soloud* g_soloud;
+
+static HMODULE g_snd_drv_handle = NULL;
+static std::vector<VoxObj*> g_vox_objs;
+
+#define CREATE_VOX_ORIGINAL(name) \
+  void * name()
+typedef CREATE_VOX_ORIGINAL(create_vox_original);
+
+CREATE_VOX_ORIGINAL(CreateVoxOriginalStub) { return 0; }
+static create_vox_original *CreateVoxOriginal_ = CreateVoxOriginalStub;
 
 extern "C" __declspec(dllexport) void* CreateVox() {
-	if (!g_soloud) {
-		printf("CreateVox(): initializing SoLoud;\n");
-		g_soloud = new SoLoud::Soloud();
-		printf("new SoLoud::Soloud;\n");
-		if (g_soloud) {
-			printf("CreateVox(): SoLoud core started;\n");
-			g_soloud->init(SoLoud::Soloud::CLIP_ROUNDOFF, SoLoud::Soloud::SDL2);
-		}
-		else {
-			MessageBox(NULL, "Failed to initialize SoLoud engine.", "SND.DRV ERROR", MB_ICONERROR);
-			abort();
-		}
-	}
-	return (void*)new VoxObj;
+
+    VoxObj* proxy = g_vox_objs.emplace_back(new VoxObj);
+    void* original = CreateVoxOriginal_();
+    proxy->original = (VoxObj*)original;
+    proxy->executor = new DeferredExecutor();
+    //proxy->hthread = CreateThread(NULL, 0, VoxThreadFunc, proxy, 0, NULL);
+	return proxy;
 }
 
 extern "C" __declspec(dllexport) BOOL VoxCheckDevice(int a1) {
+    assert("VoxCheckDevice");
 	return TRUE;
 }
 
 extern "C" __declspec(dllexport) BOOL VoxDelete(int a1) {
+    VoxObj* proxy = (VoxObj*)a1;
+    delete proxy->executor;
+    proxy->original->free_buffer_and_close_file_probably();
+    assert("VoxDelete");
 	return TRUE;
 }
 
 // todo not a bool prob
 extern "C" __declspec(dllexport) BOOL VoxFade(int a1, signed int a2, signed int a3, int a4) {
+    assert("VoxFade");
 	return FALSE;
 }
 
 extern "C" __declspec(dllexport) int VoxGetComment(int a1) {
+    assert("VoxGetComment");
 	return NULL;
 }
 
 extern "C" __declspec(dllexport) int VoxGetCurrentTime(int a1) {
+    assert("VoxGetCurrentTime");
 	return NULL;
 }
 
 extern "C" __declspec(dllexport) signed int VoxGetStatus(LPVOID a1) {
+    assert("VoxGetStatus");
 	return MAXINT32;
 }
 
 extern "C" __declspec(dllexport) int VoxGetTotalTime(LPVOID a1) {
+    assert("VoxGetTotalTime");
 	return MAXINT32;
 }
 
 extern "C" __declspec(dllexport) int VoxGetVolume(LPVOID a1) {
+    assert("VoxGetVolume");
 	return MAXINT32;
 }
 
 extern "C" __declspec(dllexport) unsigned int VoxLoad(LPVOID a1) {
+    assert("VoxLoad");
 	return MAXUINT32;
 }
 
 extern "C" __declspec(dllexport) int VoxParseComment(int a1, int a2, int a3) {
+    assert("VoxParseComment");
 	return NULL;
 }
 
 extern "C" __declspec(dllexport) BOOL VoxPause(int a1) {
+    assert("VoxPause");
 	return TRUE;
 }
 
 extern "C" __declspec(dllexport) BOOL VoxPlay(int a1) {
+    assert("VoxPlay");
 	return TRUE;
 }
 
 extern "C" __declspec(dllexport) BOOL VoxRelease(int a1) {
+    assert("VoxRelease");
 	return FALSE;
 }
 
 extern "C" __declspec(dllexport) BOOL VoxSeek(int a1, signed int a2) {
+    assert("VoxSeek");
 	return FALSE;
 }
 
 extern "C" __declspec(dllexport) BOOL VoxSetLoop(int a1, int a2) {
+    assert("VoxSetLoop");
 	return FALSE;
 }
 
 extern "C" __declspec(dllexport) BOOL VoxSetVolume(int a1, signed int a2) {
+    assert("VoxSetVolume");
 	return FALSE;
 }
-
+#if 0
 extern "C" __declspec(dllexport) BOOL IsSndDrvSexy() {
+    assert("IsSndDrvSexy");
 	return TRUE;
 }
-
+#endif
 BOOL WINAPI DllMain(
 	HINSTANCE hinstDLL,  // handle to DLL module
 	DWORD fdwReason,     // reason for calling function
@@ -101,6 +123,10 @@ BOOL WINAPI DllMain(
 	case DLL_PROCESS_ATTACH:
 		// Initialize once for each new process.
 		// Return FALSE to fail DLL load.
+        g_snd_drv_handle = LoadLibrary("snd.drv.original");
+        if (g_snd_drv_handle) {
+            CreateVoxOriginal_ = (create_vox_original*)GetProcAddress(g_snd_drv_handle, "CreateVox");
+        }
 		break;
 
 	case DLL_THREAD_ATTACH:
@@ -113,6 +139,13 @@ BOOL WINAPI DllMain(
 
 	case DLL_PROCESS_DETACH:
 		// Perform any necessary cleanup.
+        g_quit = true;
+        for (VoxObj* obj : g_vox_objs) {
+            //CloseHandle(obj->hthread);
+            delete obj->executor;
+            delete obj; // idk call delete on original?
+        }
+        FreeLibrary(g_snd_drv_handle);
 		break;
 	}
 	return TRUE;  // Successful DLL_PROCESS_ATTACH.
