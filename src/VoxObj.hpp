@@ -6,34 +6,101 @@
 #include <Windows.h>
 
 #include <cstdint>
+#include <atomic>
 
-#include "soloud.h"
-#include "soloud_wav.h"
-#include "soloud_biquadresonantfilter.h"
-#include "soloud_wavstream.h"
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <functional>
 
-extern SoLoud::Soloud* g_soloud;
+class DeferredExecutor {
+    std::queue<std::function<void()>> tasks;
+    std::mutex mtx;
+    std::condition_variable cv;
+    std::thread worker;
+    bool stop = false;
+
+public:
+    DeferredExecutor() {
+        worker = std::thread([this] {
+            while (true) {
+                std::function<void()> task;
+                {
+                    std::unique_lock<std::mutex> lock(mtx);
+                    // Wait until there's work or we're shutting down
+                    cv.wait(lock, [this] { return stop || !tasks.empty(); });
+                    
+                    if (stop && tasks.empty()) break;
+                    
+                    task = std::move(tasks.front());
+                    tasks.pop();
+                }
+                // Execute outside the lock
+                task();
+            }
+        });
+    }
+
+    // Template to accept any callable + any arguments
+    template <typename Func, typename... Args>
+    void defer(Func&& func, Args&&... args) {
+        std::lock_guard<std::mutex> lock(mtx);
+        
+        // C++17: Capture everything by value. This copies/moves args into the
+        // lambda's closure object, safely extending their lifetime.
+        tasks.emplace([func = std::forward<Func>(func), 
+                       ...args = std::forward<Args>(args)]() mutable {
+            std::invoke(func, args...);
+        });
+        
+        cv.notify_one();
+    }
+
+    ~DeferredExecutor() {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            stop = true;
+        }
+        cv.notify_all();
+        worker.join(); // Wait for pending tasks to finish
+    }
+};
+
+enum VOXPROC : uint32_t {
+    NONE           = 0,
+    LOAD           = 1 << 0,
+    RESTART        = 1 << 1,
+    PAUSE          = 1 << 2,
+    FREE           = 1 << 3,
+    UNK_SUB        = 1 << 4,
+    SET_VOLUME     = 1 << 5,
+    SET_LOOP_RANGE = 1 << 6,
+    FUNCTION13     = 1 << 7,
+};
 
 class VoxObj
 {
 public:
-	SoLoud::WavStream* m_wave = nullptr;
-	SoLoud::Wav* m_w = nullptr;
-	SoLoud::handle m_wave_handle = -1;
+    VoxObj* original;
+    DeferredExecutor* executor;
+#if 0
+    char pad[56];
 
-	float m_volume = 0.0f;
-	double m_loop_start = 0.0f;
-	double m_loop_end = 0.0f;
-	double m_time = 0.0f;
+    std::atomic<bool> is_loaded{0};
 
-	unsigned int m_frame = 0;
-	unsigned int m_previous_volume_bits = 0;
+    char pad0[60];
 
-	bool m_loop = false;
-	//char pad_0004[8]; //0x0004
-	//int16_t buffer[2048]; //0x000C
-	//char pad_100C[4158]; //0x100C
+    size_t st_hash;
+    char st_filename[2048];
 
+    int st_a2;
+    float st_volume;
+    int st_a3;
+    float st_loop_start;
+    float st_loop_end;
+    int st_af13;
+#endif
 	virtual BOOL _stdcall load(const char* filename);
 	virtual BOOL _stdcall restart();
 	virtual BOOL _stdcall pause();
@@ -51,12 +118,12 @@ public:
 	virtual void* _stdcall get_ogg_comment_ptr();
 	virtual void _stdcall Function15();
 	virtual void _stdcall Function16();
-	virtual BOOL _stdcall Function17(int a3, float a4, float a5);
-	virtual BOOL _stdcall load_mem(unsigned char *a_mem, int a_length);
-	virtual void _stdcall play3d(float a_pos_x, float a_pos_y, float a_pos_z, float volume);
-	virtual void _stdcall set_listener3d(
-		float a_lpos_x, float a_lpos_y, float a_lpos_z,
-		float a_at_x,   float a_at_y,   float a_at_z,
-		float a_up_x,   float a_up_y,   float a_up_z );
+	virtual BOOL _stdcall set_loop_range(int a3, float a4, float a5);
+	virtual BOOL _stdcall load_mem(unsigned char *a_mem, int a_length); // NOTE(): custom own stuff dont call through original
 	//virtual void _stdcall set_source3d_pos(float x, float y, float z);
 }; //Size: 0x204A
+
+DWORD WINAPI VoxThreadFunc(LPVOID param);
+
+extern bool g_quit;
+extern class DeferredExecutor* g_executor;
