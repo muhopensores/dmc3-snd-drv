@@ -1,5 +1,6 @@
 #include "VoxObj.hpp"
 #include <assert.h>
+#include <array>
 #include <vector>
 
 
@@ -13,8 +14,39 @@ typedef CREATE_VOX_ORIGINAL(create_vox_original);
 CREATE_VOX_ORIGINAL(CreateVoxOriginalStub) { return 0; }
 static create_vox_original *CreateVoxOriginal_ = CreateVoxOriginalStub;
 
-extern "C" __declspec(dllexport) void* CreateVox() {
+static std::array<LPVOID, 2> dmc3se_sleep_offsets = {
+    (LPVOID)0x00404987,
+    (LPVOID)0x00404998
+};
 
+extern "C" __declspec(dllexport) void* CreateVox() {
+    static bool once = false;
+    if (!once) {
+        DWORD oldProtect;
+        for(auto address : dmc3se_sleep_offsets) {
+            DWORD* code_ptr = (DWORD*)address;
+            if (*code_ptr != 0xD7FF646A) {
+                continue;
+            }
+
+            BOOL res = VirtualProtect(address, sizeof(DWORD), PAGE_EXECUTE_READWRITE, &oldProtect);
+            if (!res) {
+                char buffer[256];
+                sprintf(buffer, "Failed to patch sleep call at %lu", (unsigned long)address);
+                MessageBoxA(NULL, buffer, "dmc3se.exe", MB_ICONERROR); 
+            }
+            *code_ptr = 0x90909090;
+
+            DWORD oldOldProtect;
+            res =VirtualProtect(address, sizeof(DWORD), oldProtect, &oldOldProtect);
+            if (!res) {
+                char buffer[256];
+                sprintf(buffer, "Failed to restore oldProtect at %lu", (unsigned long)address);
+                MessageBoxA(NULL, buffer, "dmc3se.exe", MB_ICONERROR); 
+            }
+        }
+        once = true;
+    }
     VoxObj* proxy = g_vox_objs.emplace_back(new VoxObj);
     void* original = CreateVoxOriginal_();
     proxy->original = (VoxObj*)original;
@@ -126,6 +158,9 @@ BOOL WINAPI DllMain(
         g_snd_drv_handle = LoadLibrary("snd.drv.original");
         if (g_snd_drv_handle) {
             CreateVoxOriginal_ = (create_vox_original*)GetProcAddress(g_snd_drv_handle, "CreateVox");
+        }
+        else {
+            MessageBoxA(NULL, "Could not load snd.drv.orginal. Rename original capcoms snd.drv to snd.drv.original and restart the game", "SND.DRV", MB_ICONERROR);
         }
 		break;
 
