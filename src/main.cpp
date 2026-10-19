@@ -19,6 +19,22 @@ static std::array<LPVOID, 2> dmc3se_sleep_offsets = {
     (LPVOID)0x00404998
 };
 
+// Replaces StyleSwitcher.ini's [SOUND] ForceMode0=1.
+static void ApplyForceMode0() {
+    auto* p = reinterpret_cast<uint8_t*>(0x00409751);
+    if (*p != 0x74) return;
+
+    DWORD oldProtect;
+    if (!VirtualProtect(p, 1, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        MessageBoxA(NULL, "Failed to apply ForceMode0 patch", "SND.DRV", MB_ICONERROR);
+        return;
+    }
+    *p = 0xEB;
+    DWORD tmp;
+    VirtualProtect(p, 1, oldProtect, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), p, 1);
+}
+
 extern "C" __declspec(dllexport) void* CreateVox() {
     static bool once = false;
     if (!once) {
@@ -155,6 +171,7 @@ BOOL WINAPI DllMain(
 	case DLL_PROCESS_ATTACH:
 		// Initialize once for each new process.
 		// Return FALSE to fail DLL load.
+		ApplyForceMode0();
         g_snd_drv_handle = LoadLibrary("snd.drv.original");
         if (g_snd_drv_handle) {
             CreateVoxOriginal_ = (create_vox_original*)GetProcAddress(g_snd_drv_handle, "CreateVox");
